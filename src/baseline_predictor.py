@@ -2,7 +2,8 @@ import re
 from collections import Counter
 
 import nltk
-import pandas as pd
+import numpy as np
+import torch
 from sklearn.metrics import (
     f1_score,
     precision_score,
@@ -10,7 +11,6 @@ from sklearn.metrics import (
     roc_auc_score,
     accuracy_score,
 )
-import numpy as np
 
 nltk.download("stopwords", quiet=True)
 from nltk.corpus import stopwords
@@ -25,13 +25,6 @@ def clean(text):
     return [w for w in text.split() if w not in STOP_WORDS and len(w) > 1]
 
 
-def top_keywords(df, label, n=15):
-    mask = df[label] == 1
-    words = []
-    for text in df.loc[mask, "comment_text"]:
-        words.extend(clean(text))
-    return {word for word, _ in Counter(words).most_common(n)}
-
 
 def predict(text, keyword_sets):
     words = set(clean(text))
@@ -39,23 +32,44 @@ def predict(text, keyword_sets):
 
 
 def main():
-    df = pd.read_csv("data/train.csv")
+    from dataset import get_dataloader
 
-    train = df.sample(frac=0.8, random_state=42)
-    val = df.drop(train.index).reset_index(drop=True)
-    print(f"Train: {len(train)}  Val: {len(val)}\n")
+    train_loader = get_dataloader("data/train.csv", "data/train_ids.csv", mode="raw", batch_size=64, shuffle=False)
+    val_loader   = get_dataloader("data/train.csv", "data/val_ids.csv",   mode="raw", batch_size=64, shuffle=False)
 
-    keyword_sets = [top_keywords(train, label) for label in LABELS]
+    print(f"Train batches: {len(train_loader)}  Val batches: {len(val_loader)}\n")
+
+    # accumulate all texts and labels from the train loader
+    train_texts, train_labels = [], []
+    for texts, labels in train_loader:
+        train_texts.extend(texts)
+        train_labels.append(labels)
+    train_labels = torch.cat(train_labels, dim=0)  # (N, 6)
+
+    # build keyword sets from training data
+    keyword_sets = []
+    for i, label in enumerate(LABELS):
+        mask = train_labels[:, i] == 1
+        positive_texts = [t for t, m in zip(train_texts, mask) if m]
+        words = []
+        for text in positive_texts:
+            words.extend(clean(text))
+        kws = {word for word, _ in Counter(words).most_common(15)}
+        keyword_sets.append(kws)
 
     for label, kws in zip(LABELS, keyword_sets):
         print(f"{label}: {sorted(kws)}")
     print()
 
-    preds = val["comment_text"].apply(lambda t: predict(t, keyword_sets))
-    pred_df = pd.DataFrame(preds.tolist(), columns=LABELS)
+    # run predictions on val
+    all_preds, all_labels = [], []
+    for texts, labels in val_loader:
+        for text in texts:
+            all_preds.append(predict(text, keyword_sets))
+        all_labels.append(labels)
 
-    y_true = val[LABELS].values
-    y_pred = pred_df.values
+    y_true = torch.cat(all_labels, dim=0).numpy()   # (N, 6)
+    y_pred = np.array(all_preds)                     # (N, 6)
 
     # per label metrics
     print(f"{'Label':<20} {'Accuracy':>10} {'Precision':>10} {'Recall':>10} {'F1':>10} {'ROC-AUC':>10}")
