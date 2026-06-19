@@ -1,0 +1,13 @@
+[project]
+name = "toxic-comment-classifier"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pandas>=3.0.2",
+    "nltk",
+    "torch",
+    "matplotlib>=3.11.0",
+    "scikit-learn>=1.9.0",
+]
